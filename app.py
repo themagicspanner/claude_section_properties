@@ -11,6 +11,7 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, callback, dcc, html, no_update
 
+from shapely import affinity
 from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
@@ -203,7 +204,7 @@ def props_table(props: dict):
 
 
 def build_builtup_girder(dw, tw, bf_top, tf_top, bf_bot, tf_bot,
-                         ang_v, ang_h, ang_t):
+                         ang_v, ang_h, ang_t, r_root=0, r_toe=0, n_r=8):
     """Build a historical riveted plate girder cross-section.
 
     All inputs in mm.  Returns a sectionproperties Geometry.
@@ -212,11 +213,21 @@ def build_builtup_girder(dw, tw, bf_top, tf_top, bf_bot, tf_bot,
     Angles sit within the web depth at each corner, with one leg against the
     web face and the other leg against the flange inner face.
 
+    r_root: root radius at the inside corner of each angle.
+    r_toe:  toe radius at each leg tip (inner-face side).
+    n_r:    number of points per quarter-arc.
+
     Layout (bottom to top):
       bottom flange plate | web plate (with angles at corners) | top flange plate
     Total depth = tf_bot + dw + tf_top.
     """
     hw = tw / 2  # half web thickness
+    pi = np.pi
+
+    def _arc(cx, cy, r, a0, a1, n=n_r):
+        """Return n points along a circular arc from angle a0 to a1."""
+        angles = np.linspace(a0, a1, max(n, 2))
+        return [(cx + r * np.cos(a), cy + r * np.sin(a)) for a in angles]
 
     # --- Web plate (full depth between flanges) ---
     web = box(-hw, 0, hw, dw)
@@ -225,51 +236,56 @@ def build_builtup_girder(dw, tw, bf_top, tf_top, bf_bot, tf_bot,
     bot_fl = box(-bf_bot / 2, -tf_bot, bf_bot / 2, 0)
     top_fl = box(-bf_top / 2, dw, bf_top / 2, dw + tf_top)
 
-    # --- Four connecting angles (L-shapes at corners) ---
-    # Each angle: one leg flat against the web face, one leg flat against
-    # the flange inner face.  Angles sit inside the web depth.
+    # --- Build bottom-left angle with root & toe radii ---
+    #
+    #        E ─── F          F is against the web face
+    #        │     │
+    #   r_t  ╮     │  vert leg (against web)
+    #        │     │
+    #   C────╯     │  r_root at inside corner
+    #   │    r_r   │
+    #   ╰─C        │  r_t at horiz leg tip
+    #   │          │
+    #   B ──────── A          A is at flange/web junction
+    #
+    # A = (-hw, 0)                    horiz leg against flange face
+    # B = (-(hw+ang_h), 0)            outer corner of horiz leg tip
+    # C = (-(hw+ang_h), ang_t)        toe (inner face of horiz leg tip)
+    # D = (-(hw+ang_t), ang_t)        root (inside corner)
+    # E = (-(hw+ang_t), ang_t+ang_v)  toe (inner face of vert leg tip)
+    # F = (-hw, ang_t+ang_v)          against web face
 
-    # Bottom-left: horiz leg along bottom flange face (y=0..ang_t),
-    #              vert leg up along web left face (y=ang_t..ang_t+ang_v)
-    ang_bl = Polygon([
-        (-hw, 0),
-        (-(hw + ang_h), 0),
-        (-(hw + ang_h), ang_t),
-        (-(hw + ang_t), ang_t),
-        (-(hw + ang_t), ang_t + ang_v),
-        (-hw, ang_t + ang_v),
-    ])
+    pts = [(-hw, 0), (-(hw + ang_h), 0)]
 
-    # Bottom-right: mirror of bottom-left
-    ang_br = Polygon([
-        (hw, 0),
-        (hw + ang_h, 0),
-        (hw + ang_h, ang_t),
-        (hw + ang_t, ang_t),
-        (hw + ang_t, ang_t + ang_v),
-        (hw, ang_t + ang_v),
-    ])
+    if r_toe > 0:
+        # Toe arc at C: from vertical edge to horizontal edge
+        pts += _arc(-(hw + ang_h) + r_toe, ang_t - r_toe,
+                    r_toe, pi, pi / 2)
+    else:
+        pts.append((-(hw + ang_h), ang_t))
 
-    # Top-left: horiz leg along top flange face (y=dw-ang_t..dw),
-    #           vert leg down along web left face (y=dw-ang_t-ang_v..dw-ang_t)
-    ang_tl = Polygon([
-        (-hw, dw),
-        (-(hw + ang_h), dw),
-        (-(hw + ang_h), dw - ang_t),
-        (-(hw + ang_t), dw - ang_t),
-        (-(hw + ang_t), dw - ang_t - ang_v),
-        (-hw, dw - ang_t - ang_v),
-    ])
+    if r_root > 0:
+        # Root arc at D: from horizontal edge to vertical edge
+        pts += _arc(-(hw + ang_t) + r_root, ang_t + r_root,
+                    r_root, 3 * pi / 2, pi)
+    else:
+        pts.append((-(hw + ang_t), ang_t))
 
-    # Top-right: mirror of top-left
-    ang_tr = Polygon([
-        (hw, dw),
-        (hw + ang_h, dw),
-        (hw + ang_h, dw - ang_t),
-        (hw + ang_t, dw - ang_t),
-        (hw + ang_t, dw - ang_t - ang_v),
-        (hw, dw - ang_t - ang_v),
-    ])
+    if r_toe > 0:
+        # Toe arc at E: from vertical edge to horizontal edge
+        pts += _arc(-(hw + ang_t) + r_toe, ang_t + ang_v - r_toe,
+                    r_toe, pi, pi / 2)
+    else:
+        pts.append((-(hw + ang_t), ang_t + ang_v))
+
+    pts.append((-hw, ang_t + ang_v))
+
+    ang_bl = Polygon(pts)
+
+    # --- Derive other three angles by mirroring ---
+    ang_br = affinity.scale(ang_bl, xfact=-1, origin=(0, 0))
+    ang_tl = affinity.scale(ang_bl, yfact=-1, origin=(0, dw / 2))
+    ang_tr = affinity.scale(ang_bl, xfact=-1, yfact=-1, origin=(0, dw / 2))
 
     combined = unary_union([web, ang_bl, ang_br, ang_tl, ang_tr, bot_fl, top_fl])
     return Geometry(combined)
@@ -443,6 +459,8 @@ def custom_params_layout():
                     make_param_input("inp-av-bu",  "Vert. leg (in.)",        4.0,   step=0.125),
                     make_param_input("inp-ah-bu",  "Horiz. leg (in.)",       3.5,   step=0.125),
                     make_param_input("inp-at-bu",  "Thickness (in.)",        0.375, step=0.0625),
+                    make_param_input("inp-rr-bu",  "Root radius (in.)",      0.375, step=0.0625, min_val=0),
+                    make_param_input("inp-rt-bu",  "Toe radius (in.)",       0.1875, step=0.0625, min_val=0),
                 ],
             ),
         ],
@@ -753,6 +771,8 @@ def update_catalogue_sections(series):
     State("inp-av-bu",  "value"),
     State("inp-ah-bu",  "value"),
     State("inp-at-bu",  "value"),
+    State("inp-rr-bu",  "value"),
+    State("inp-rt-bu",  "value"),
     # Catalogue
     State("cat-series",  "value"),
     State("cat-section", "value"),
@@ -777,7 +797,7 @@ def calculate(
     # CHS
     d_chs, t_chs, n_chs,
     # Built-Up Girder
-    dw_bu, tw_bu, bft_bu, tft_bu, bfb_bu, tfb_bu, av_bu, ah_bu, at_bu,
+    dw_bu, tw_bu, bft_bu, tft_bu, bfb_bu, tfb_bu, av_bu, ah_bu, at_bu, rr_bu, rt_bu,
     # Catalogue
     cat_series, cat_section_name,
 ):
@@ -823,22 +843,21 @@ def calculate(
                 )
 
             elif st == "Built-Up Girder (Historical)":
-                bu = {k: float(v) for k, v in {
-                    "dw": dw_bu, "tw": tw_bu,
-                    "bft": bft_bu, "tft": tft_bu,
-                    "bfb": bfb_bu, "tfb": tfb_bu,
-                    "av": av_bu, "ah": ah_bu, "at": at_bu,
-                }.items() if v is not None}
+                def _in(v, default=0):
+                    return float(v) * IN_TO_MM if v is not None else default * IN_TO_MM
+
                 geometry = build_builtup_girder(
-                    dw=bu["dw"] * IN_TO_MM,
-                    tw=bu["tw"] * IN_TO_MM,
-                    bf_top=bu["bft"] * IN_TO_MM,
-                    tf_top=bu["tft"] * IN_TO_MM,
-                    bf_bot=bu["bfb"] * IN_TO_MM,
-                    tf_bot=bu["tfb"] * IN_TO_MM,
-                    ang_v=bu["av"] * IN_TO_MM,
-                    ang_h=bu["ah"] * IN_TO_MM,
-                    ang_t=bu["at"] * IN_TO_MM,
+                    dw=_in(dw_bu, 36),
+                    tw=_in(tw_bu, 0.375),
+                    bf_top=_in(bft_bu, 14),
+                    tf_top=_in(tft_bu, 0.5),
+                    bf_bot=_in(bfb_bu, 14),
+                    tf_bot=_in(tfb_bu, 0.75),
+                    ang_v=_in(av_bu, 4),
+                    ang_h=_in(ah_bu, 3.5),
+                    ang_t=_in(at_bu, 0.375),
+                    r_root=_in(rr_bu, 0.375),
+                    r_toe=_in(rt_bu, 0.1875),
                 )
 
         else:  # catalogue
