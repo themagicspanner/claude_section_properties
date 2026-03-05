@@ -1,7 +1,7 @@
 """
 Steel Section Properties Calculator
 A Dash app for computing cross-section properties using the sectionproperties library.
-Supports parametric (custom) and EU standard catalogue sections.
+Supports parametric (custom) and UK standard catalogue sections (Tata Steel / Corus).
 """
 
 import traceback
@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, callback, dcc, html, no_update
 
 import sectionproperties.pre.library as sp_lib
-from eu_catalogue import (
+from uk_catalogue import (
     ALL_CATALOGUES,
     ANGLE_SERIES,
     CHANNEL_SERIES,
@@ -407,7 +407,7 @@ sidebar = dbc.Card(
                             id="mode-radio",
                             options=[
                                 {"label": "Custom", "value": "custom"},
-                                {"label": "EU Catalogue", "value": "catalogue"},
+                                {"label": "UK Catalogue", "value": "catalogue"},
                             ],
                             value="custom",
                             inline=True,
