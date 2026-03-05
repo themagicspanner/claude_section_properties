@@ -11,7 +11,11 @@ import numpy as np
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, callback, dcc, html, no_update
 
+from shapely.geometry import Polygon, box
+from shapely.ops import unary_union
+
 import sectionproperties.pre.library as sp_lib
+from sectionproperties.pre.geometry import Geometry
 from uk_catalogue import (
     ALL_CATALOGUES,
     ANGLE_SERIES,
@@ -42,7 +46,10 @@ SECTION_TYPES_CUSTOM = [
     "Angle Section",
     "Rectangular Hollow Section (RHS)",
     "Circular Hollow Section (CHS)",
+    "Built-Up Girder (Historical)",
 ]
+
+IN_TO_MM = 25.4
 
 CATALOGUE_SERIES = list(ALL_CATALOGUES.keys())
 
@@ -195,6 +202,78 @@ def props_table(props: dict):
     )
 
 
+def build_builtup_girder(dw, tw, bf_top, tf_top, bf_bot, tf_bot,
+                         ang_v, ang_h, ang_t):
+    """Build a historical riveted plate girder cross-section.
+
+    All inputs in mm.  Returns a sectionproperties Geometry.
+
+    Layout (bottom to top):
+      bottom flange plate | bottom angle horiz legs | web | top angle horiz legs | top flange plate
+
+    Four connecting angles sit at the web-flange corners.
+    """
+    hw = tw / 2  # half web thickness
+
+    # --- Web plate ---
+    web = box(-hw, 0, hw, dw)
+
+    # --- Angle helper (L-shape polygon) ---
+    def _angle_bl():
+        """Bottom-left angle: vertical leg up, horizontal leg down-left."""
+        return Polygon([
+            (-hw, -ang_t),
+            (-(hw + ang_h), -ang_t),
+            (-(hw + ang_h), 0),
+            (-(hw + ang_t), 0),
+            (-(hw + ang_t), ang_v),
+            (-hw, ang_v),
+        ])
+
+    def _angle_br():
+        """Bottom-right angle: mirror of bottom-left."""
+        return Polygon([
+            (hw, -ang_t),
+            (hw + ang_h, -ang_t),
+            (hw + ang_h, 0),
+            (hw + ang_t, 0),
+            (hw + ang_t, ang_v),
+            (hw, ang_v),
+        ])
+
+    def _angle_tl():
+        """Top-left angle: vertical leg down, horizontal leg up-left."""
+        return Polygon([
+            (-hw, dw + ang_t),
+            (-(hw + ang_h), dw + ang_t),
+            (-(hw + ang_h), dw),
+            (-(hw + ang_t), dw),
+            (-(hw + ang_t), dw - ang_v),
+            (-hw, dw - ang_v),
+        ])
+
+    def _angle_tr():
+        """Top-right angle: mirror of top-left."""
+        return Polygon([
+            (hw, dw + ang_t),
+            (hw + ang_h, dw + ang_t),
+            (hw + ang_h, dw),
+            (hw + ang_t, dw),
+            (hw + ang_t, dw - ang_v),
+            (hw, dw - ang_v),
+        ])
+
+    # --- Flange plates ---
+    bot_fl = box(-bf_bot / 2, -ang_t - tf_bot, bf_bot / 2, -ang_t)
+    top_fl = box(-bf_top / 2, dw + ang_t, bf_top / 2, dw + ang_t + tf_top)
+
+    combined = unary_union([
+        web, _angle_bl(), _angle_br(), _angle_tl(), _angle_tr(),
+        bot_fl, top_fl,
+    ])
+    return Geometry(combined)
+
+
 def compute_section(geometry):
     """Run full section analysis; return Section object."""
     geometry.create_mesh(mesh_sizes=[min(10, geometry.geom.length / 40)])
@@ -342,6 +421,27 @@ def custom_params_layout():
                     make_param_input("inp-d-chs",  "d — Outer diameter",     219.1),
                     make_param_input("inp-t-chs",  "t — Wall thickness",       8.0),
                     make_param_input("inp-n-chs",  "n — Points on circle",     64, step=1, min_val=16),
+                ],
+            ),
+            # Built-Up Girder (Historical)
+            html.Div(
+                id="params-builtup",
+                style={"display": "none"},
+                children=[
+                    html.H6("Built-Up Girder (inches)", className="mt-3 mb-2 text-secondary"),
+                    html.P("Web plate", className="fw-semibold mb-1 small"),
+                    make_param_input("inp-dw-bu",  "Depth (in.)",           36.0,  step=0.25),
+                    make_param_input("inp-tw-bu",  "Thickness (in.)",        0.375, step=0.0625),
+                    html.P("Top flange plate", className="fw-semibold mb-1 mt-2 small"),
+                    make_param_input("inp-bft-bu", "Width (in.)",           14.0,  step=0.25),
+                    make_param_input("inp-tft-bu", "Thickness (in.)",        0.5,   step=0.0625),
+                    html.P("Bottom flange plate", className="fw-semibold mb-1 mt-2 small"),
+                    make_param_input("inp-bfb-bu", "Width (in.)",           14.0,  step=0.25),
+                    make_param_input("inp-tfb-bu", "Thickness (in.)",        0.75,  step=0.0625),
+                    html.P("Connecting angles (x4)", className="fw-semibold mb-1 mt-2 small"),
+                    make_param_input("inp-av-bu",  "Vert. leg (in.)",        4.0,   step=0.125),
+                    make_param_input("inp-ah-bu",  "Horiz. leg (in.)",       3.5,   step=0.125),
+                    make_param_input("inp-at-bu",  "Thickness (in.)",        0.375, step=0.0625),
                 ],
             ),
         ],
@@ -558,21 +658,23 @@ def toggle_mode(mode):
     Output("params-angle",      "style"),
     Output("params-rhs",        "style"),
     Output("params-chs",        "style"),
+    Output("params-builtup",    "style"),
     Input("section-type", "value"),
 )
 def toggle_param_panels(section_type):
     show = {}
     hide = {"display": "none"}
     mapping = {
-        "I-Section (symmetric)":          (show, hide, hide, hide, hide, hide, hide),
-        "Mono I-Section (asymmetric)":     (hide, show, hide, hide, hide, hide, hide),
-        "Channel (UPN style)":             (hide, hide, show, hide, hide, hide, hide),
-        "Tee Section":                     (hide, hide, hide, show, hide, hide, hide),
-        "Angle Section":                   (hide, hide, hide, hide, show, hide, hide),
-        "Rectangular Hollow Section (RHS)":(hide, hide, hide, hide, hide, show, hide),
-        "Circular Hollow Section (CHS)":   (hide, hide, hide, hide, hide, hide, show),
+        "I-Section (symmetric)":          (show, hide, hide, hide, hide, hide, hide, hide),
+        "Mono I-Section (asymmetric)":     (hide, show, hide, hide, hide, hide, hide, hide),
+        "Channel (UPN style)":             (hide, hide, show, hide, hide, hide, hide, hide),
+        "Tee Section":                     (hide, hide, hide, show, hide, hide, hide, hide),
+        "Angle Section":                   (hide, hide, hide, hide, show, hide, hide, hide),
+        "Rectangular Hollow Section (RHS)":(hide, hide, hide, hide, hide, show, hide, hide),
+        "Circular Hollow Section (CHS)":   (hide, hide, hide, hide, hide, hide, show, hide),
+        "Built-Up Girder (Historical)":    (hide, hide, hide, hide, hide, hide, hide, show),
     }
-    return mapping.get(section_type, (show, hide, hide, hide, hide, hide, hide))
+    return mapping.get(section_type, (show, hide, hide, hide, hide, hide, hide, hide))
 
 
 @callback(
@@ -640,6 +742,16 @@ def update_catalogue_sections(series):
     State("inp-d-chs",  "value"),
     State("inp-t-chs",  "value"),
     State("inp-n-chs",  "value"),
+    # Built-Up Girder
+    State("inp-dw-bu",  "value"),
+    State("inp-tw-bu",  "value"),
+    State("inp-bft-bu", "value"),
+    State("inp-tft-bu", "value"),
+    State("inp-bfb-bu", "value"),
+    State("inp-tfb-bu", "value"),
+    State("inp-av-bu",  "value"),
+    State("inp-ah-bu",  "value"),
+    State("inp-at-bu",  "value"),
     # Catalogue
     State("cat-series",  "value"),
     State("cat-section", "value"),
@@ -663,6 +775,8 @@ def calculate(
     d_rhs, b_rhs, t_rhs, rout_rhs, nr_rhs,
     # CHS
     d_chs, t_chs, n_chs,
+    # Built-Up Girder
+    dw_bu, tw_bu, bft_bu, tft_bu, bfb_bu, tfb_bu, av_bu, ah_bu, at_bu,
     # Catalogue
     cat_series, cat_section_name,
 ):
@@ -705,6 +819,19 @@ def calculate(
             elif st == "Circular Hollow Section (CHS)":
                 geometry = sp_lib.circular_hollow_section(
                     d=d_chs, t=t_chs, n=int(n_chs)
+                )
+
+            elif st == "Built-Up Girder (Historical)":
+                geometry = build_builtup_girder(
+                    dw=dw_bu * IN_TO_MM,
+                    tw=tw_bu * IN_TO_MM,
+                    bf_top=bft_bu * IN_TO_MM,
+                    tf_top=tft_bu * IN_TO_MM,
+                    bf_bot=bfb_bu * IN_TO_MM,
+                    tf_bot=tfb_bu * IN_TO_MM,
+                    ang_v=av_bu * IN_TO_MM,
+                    ang_h=ah_bu * IN_TO_MM,
+                    ang_t=at_bu * IN_TO_MM,
                 )
 
         else:  # catalogue
