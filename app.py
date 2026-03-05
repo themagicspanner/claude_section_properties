@@ -208,69 +208,70 @@ def build_builtup_girder(dw, tw, bf_top, tf_top, bf_bot, tf_bot,
 
     All inputs in mm.  Returns a sectionproperties Geometry.
 
-    Layout (bottom to top):
-      bottom flange plate | bottom angle horiz legs | web | top angle horiz legs | top flange plate
+    The web plate runs the full depth (dw) from bottom flange to top flange.
+    Angles sit within the web depth at each corner, with one leg against the
+    web face and the other leg against the flange inner face.
 
-    Four connecting angles sit at the web-flange corners.
+    Layout (bottom to top):
+      bottom flange plate | web plate (with angles at corners) | top flange plate
+    Total depth = tf_bot + dw + tf_top.
     """
     hw = tw / 2  # half web thickness
 
-    # --- Web plate ---
+    # --- Web plate (full depth between flanges) ---
     web = box(-hw, 0, hw, dw)
 
-    # --- Angle helper (L-shape polygon) ---
-    def _angle_bl():
-        """Bottom-left angle: vertical leg up, horizontal leg down-left."""
-        return Polygon([
-            (-hw, -ang_t),
-            (-(hw + ang_h), -ang_t),
-            (-(hw + ang_h), 0),
-            (-(hw + ang_t), 0),
-            (-(hw + ang_t), ang_v),
-            (-hw, ang_v),
-        ])
+    # --- Flange plates (directly against web ends) ---
+    bot_fl = box(-bf_bot / 2, -tf_bot, bf_bot / 2, 0)
+    top_fl = box(-bf_top / 2, dw, bf_top / 2, dw + tf_top)
 
-    def _angle_br():
-        """Bottom-right angle: mirror of bottom-left."""
-        return Polygon([
-            (hw, -ang_t),
-            (hw + ang_h, -ang_t),
-            (hw + ang_h, 0),
-            (hw + ang_t, 0),
-            (hw + ang_t, ang_v),
-            (hw, ang_v),
-        ])
+    # --- Four connecting angles (L-shapes at corners) ---
+    # Each angle: one leg flat against the web face, one leg flat against
+    # the flange inner face.  Angles sit inside the web depth.
 
-    def _angle_tl():
-        """Top-left angle: vertical leg down, horizontal leg up-left."""
-        return Polygon([
-            (-hw, dw + ang_t),
-            (-(hw + ang_h), dw + ang_t),
-            (-(hw + ang_h), dw),
-            (-(hw + ang_t), dw),
-            (-(hw + ang_t), dw - ang_v),
-            (-hw, dw - ang_v),
-        ])
-
-    def _angle_tr():
-        """Top-right angle: mirror of top-left."""
-        return Polygon([
-            (hw, dw + ang_t),
-            (hw + ang_h, dw + ang_t),
-            (hw + ang_h, dw),
-            (hw + ang_t, dw),
-            (hw + ang_t, dw - ang_v),
-            (hw, dw - ang_v),
-        ])
-
-    # --- Flange plates ---
-    bot_fl = box(-bf_bot / 2, -ang_t - tf_bot, bf_bot / 2, -ang_t)
-    top_fl = box(-bf_top / 2, dw + ang_t, bf_top / 2, dw + ang_t + tf_top)
-
-    combined = unary_union([
-        web, _angle_bl(), _angle_br(), _angle_tl(), _angle_tr(),
-        bot_fl, top_fl,
+    # Bottom-left: horiz leg along bottom flange face (y=0..ang_t),
+    #              vert leg up along web left face (y=ang_t..ang_t+ang_v)
+    ang_bl = Polygon([
+        (-hw, 0),
+        (-(hw + ang_h), 0),
+        (-(hw + ang_h), ang_t),
+        (-(hw + ang_t), ang_t),
+        (-(hw + ang_t), ang_t + ang_v),
+        (-hw, ang_t + ang_v),
     ])
+
+    # Bottom-right: mirror of bottom-left
+    ang_br = Polygon([
+        (hw, 0),
+        (hw + ang_h, 0),
+        (hw + ang_h, ang_t),
+        (hw + ang_t, ang_t),
+        (hw + ang_t, ang_t + ang_v),
+        (hw, ang_t + ang_v),
+    ])
+
+    # Top-left: horiz leg along top flange face (y=dw-ang_t..dw),
+    #           vert leg down along web left face (y=dw-ang_t-ang_v..dw-ang_t)
+    ang_tl = Polygon([
+        (-hw, dw),
+        (-(hw + ang_h), dw),
+        (-(hw + ang_h), dw - ang_t),
+        (-(hw + ang_t), dw - ang_t),
+        (-(hw + ang_t), dw - ang_t - ang_v),
+        (-hw, dw - ang_t - ang_v),
+    ])
+
+    # Top-right: mirror of top-left
+    ang_tr = Polygon([
+        (hw, dw),
+        (hw + ang_h, dw),
+        (hw + ang_h, dw - ang_t),
+        (hw + ang_t, dw - ang_t),
+        (hw + ang_t, dw - ang_t - ang_v),
+        (hw, dw - ang_t - ang_v),
+    ])
+
+    combined = unary_union([web, ang_bl, ang_br, ang_tl, ang_tr, bot_fl, top_fl])
     return Geometry(combined)
 
 
