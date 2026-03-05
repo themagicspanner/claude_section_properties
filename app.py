@@ -123,8 +123,36 @@ def shear_centre_trace(xsc, ysc):
     )
 
 
+def mesh_trace(geometry):
+    """Return a Plotly Scatter trace showing finite-element triangles."""
+    mesh = geometry.mesh
+    vertices = mesh["vertices"]
+    triangles = mesh["triangles"]
+
+    x_coords = []
+    y_coords = []
+    for tri in triangles:
+        # tri6 elements: first 3 indices are corner nodes
+        idx = [tri[0], tri[1], tri[2], tri[0]]
+        for i in idx:
+            x_coords.append(vertices[i, 0])
+            y_coords.append(vertices[i, 1])
+        x_coords.append(None)
+        y_coords.append(None)
+
+    return go.Scatter(
+        x=x_coords,
+        y=y_coords,
+        mode="lines",
+        line={"color": "rgba(100, 100, 100, 0.3)", "width": 0.5},
+        name="Finite elements",
+        hoverinfo="skip",
+    )
+
+
 def build_section_figure(geometry, cx, cy, xsc, ysc):
     traces = section_outline_trace(geometry)
+    traces.append(mesh_trace(geometry))
     traces.append(centroid_trace(cx, cy))
     traces.append(shear_centre_trace(xsc, ysc))
 
@@ -135,8 +163,8 @@ def build_section_figure(geometry, cx, cy, xsc, ysc):
         plot_bgcolor="white",
         paper_bgcolor="white",
         margin={"l": 40, "r": 20, "t": 20, "b": 40},
-        legend={"x": 0.01, "y": 0.99},
-        height=380,
+        legend={"orientation": "h", "yanchor": "top", "y": -0.15, "xanchor": "center", "x": 0.5},
+        height=420,
     )
     return fig
 
