@@ -823,16 +823,22 @@ def calculate(
                 )
 
             elif st == "Built-Up Girder (Historical)":
+                bu = {k: float(v) for k, v in {
+                    "dw": dw_bu, "tw": tw_bu,
+                    "bft": bft_bu, "tft": tft_bu,
+                    "bfb": bfb_bu, "tfb": tfb_bu,
+                    "av": av_bu, "ah": ah_bu, "at": at_bu,
+                }.items() if v is not None}
                 geometry = build_builtup_girder(
-                    dw=dw_bu * IN_TO_MM,
-                    tw=tw_bu * IN_TO_MM,
-                    bf_top=bft_bu * IN_TO_MM,
-                    tf_top=tft_bu * IN_TO_MM,
-                    bf_bot=bfb_bu * IN_TO_MM,
-                    tf_bot=tfb_bu * IN_TO_MM,
-                    ang_v=av_bu * IN_TO_MM,
-                    ang_h=ah_bu * IN_TO_MM,
-                    ang_t=at_bu * IN_TO_MM,
+                    dw=bu["dw"] * IN_TO_MM,
+                    tw=bu["tw"] * IN_TO_MM,
+                    bf_top=bu["bft"] * IN_TO_MM,
+                    tf_top=bu["tft"] * IN_TO_MM,
+                    bf_bot=bu["bfb"] * IN_TO_MM,
+                    tf_bot=bu["tfb"] * IN_TO_MM,
+                    ang_v=bu["av"] * IN_TO_MM,
+                    ang_h=bu["ah"] * IN_TO_MM,
+                    ang_t=bu["at"] * IN_TO_MM,
                 )
 
         else:  # catalogue
